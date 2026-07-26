@@ -419,6 +419,7 @@ function animate() {
 
         if (!isMobile) {
             controls.moveRight(-velocity.x * delta);
+            controls.moveForward(-velocity.z * delta);
         } else {
             // Manual kalkulasi gerakan relatif terhadap rotasi Y kamera (Mobile)
             const moveDir = new THREE.Vector3(velocity.x * delta, 0, velocity.z * delta);
