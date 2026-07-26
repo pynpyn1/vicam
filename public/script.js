@@ -1,5 +1,8 @@
 const socket = io('/');
 
+// Deteksi Perangkat
+const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+
 // UI Elements
 const loginMenu = document.getElementById('login-menu');
 const usernameInput = document.getElementById('username-input');
@@ -8,6 +11,9 @@ const uiLayer = document.getElementById('ui-layer');
 const healthFill = document.getElementById('health-fill');
 const myScoreEl = document.getElementById('my-score');
 const killFeed = document.getElementById('kill-feed');
+const mobileControls = document.getElementById('mobile-controls');
+const shootBtnMobile = document.getElementById('shoot-btn-mobile');
+const lookZone = document.getElementById('touch-look-zone');
 
 // Game State
 let myId = null;
@@ -19,6 +25,7 @@ const obstacles = [];
 const lasers = [];
 let scene, camera, renderer, controls, raycaster;
 let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+let joyX = 0, joyY = 0; // Untuk Joystick HP
 let prevTime = performance.now();
 const velocity = new THREE.Vector3();
 const direction = new THREE.Vector3();
@@ -30,7 +37,12 @@ joinBtn.addEventListener('click', () => {
     loginMenu.style.display = 'none';
     uiLayer.style.display = 'block';
     
-    // Play some futuristic sound if possible, for now just init
+    // Tampilkan UI HP jika diperlukan
+    if (isMobile) {
+        mobileControls.style.display = 'block';
+        initMobileControls();
+    }
+    
     initThreeJS();
     isPlaying = true;
 });
@@ -39,27 +51,36 @@ function initThreeJS() {
     // 1. Scene & Environment
     scene = new THREE.Scene();
     scene.background = new THREE.Color(0x050510);
-    scene.fog = new THREE.FogExp2(0x050510, 0.015); // Kabut dramatis
+    scene.fog = new THREE.FogExp2(0x050510, 0.015);
 
     // 2. Camera
     camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
     
-    // 3. Renderer (Bagus)
+    // 3. Renderer
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.shadowMap.enabled = true; // Aktifkan bayangan
+    renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     document.body.appendChild(renderer.domElement);
 
-    // 4. Controls
-    controls = new THREE.PointerLockControls(camera, document.body);
-    document.addEventListener('click', () => {
-        if (isPlaying) controls.lock();
-    });
+    // 4. Controls (Hanya PC yang pakai PointerLock)
+    if (!isMobile) {
+        controls = new THREE.PointerLockControls(camera, document.body);
+        document.addEventListener('click', () => {
+            if (isPlaying) controls.lock();
+        });
+        document.addEventListener('mousedown', onMouseClick); // Tembak PC
+    } else {
+        // Objek dummy untuk kompalibilitas kode PC
+        controls = { isLocked: true, moveRight: () => {}, moveForward: () => {} };
+        // Kamera agak tinggi di awal
+        camera.position.y = 2;
+        camera.rotation.order = "YXZ"; // Penting untuk touch look FPS
+    }
 
     raycaster = new THREE.Raycaster();
 
-    // 5. Lantai Arena (Solid gelap + Grid Neon)
+    // 5. Lantai Arena
     const floorGeo = new THREE.PlaneGeometry(200, 200);
     const floorMat = new THREE.MeshStandardMaterial({ color: 0x0a0a1a, roughness: 0.8, metalness: 0.2 });
     const floor = new THREE.Mesh(floorGeo, floorMat);
@@ -71,7 +92,7 @@ function initThreeJS() {
     gridHelper.position.y = 0.01;
     scene.add(gridHelper);
 
-    // 6. Langit Bintang / Partikel
+    // 6. Langit Bintang
     const starGeo = new THREE.BufferGeometry();
     const starMat = new THREE.PointsMaterial({ color: 0xffffff, size: 0.5 });
     const starVertices = [];
@@ -102,16 +123,64 @@ function initThreeJS() {
     // 8. Tambahkan Pilar Rintangan Neon
     createArenaObstacles();
 
-    // Input WASD
-    document.addEventListener('keydown', onKeyDown);
-    document.addEventListener('keyup', onKeyUp);
-    document.addEventListener('mousedown', onMouseClick); // Tembak
+    // Input WASD (PC)
+    if (!isMobile) {
+        document.addEventListener('keydown', onKeyDown);
+        document.addEventListener('keyup', onKeyUp);
+    }
 
     // Mulai Render
     animate();
 }
 
-// Bikin Pilar/Rintangan secara acak
+function initMobileControls() {
+    // 1. Virtual Joystick (Nipple.js)
+    const joyManager = nipplejs.create({
+        zone: document.getElementById('joystick-zone'),
+        mode: 'static',
+        position: { left: '50%', top: '50%' },
+        color: 'cyan'
+    });
+
+    joyManager.on('move', (evt, data) => {
+        // force max = 2. kita normalize
+        const force = Math.min(data.force, 2) / 2;
+        joyX = Math.cos(data.angle.radian) * force;
+        joyY = Math.sin(data.angle.radian) * force;
+    });
+
+    joyManager.on('end', () => {
+        joyX = 0; joyY = 0;
+    });
+
+    // 2. Touch Look (Kamera putar pakai jempol kanan)
+    let touchStartX, touchStartY;
+    let camStartX, camStartY;
+    
+    lookZone.addEventListener('touchstart', (e) => {
+        touchStartX = e.touches[0].pageX;
+        touchStartY = e.touches[0].pageY;
+        camStartX = camera.rotation.y;
+        camStartY = camera.rotation.x;
+    });
+
+    lookZone.addEventListener('touchmove', (e) => {
+        e.preventDefault(); // Biar gak ketarik scroll web
+        const deltaX = e.touches[0].pageX - touchStartX;
+        const deltaY = e.touches[0].pageY - touchStartY;
+        
+        // Atur rotasi kamera (Yaw dan Pitch)
+        camera.rotation.y = camStartX - (deltaX * 0.005);
+        camera.rotation.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, camStartY - (deltaY * 0.005)));
+    }, { passive: false });
+
+    // 3. Tombol Tembak
+    shootBtnMobile.addEventListener('touchstart', (e) => {
+        e.preventDefault();
+        fireWeapon();
+    });
+}
+
 function createArenaObstacles() {
     const geo = new THREE.BoxGeometry(4, 15, 4);
     for(let i=0; i<40; i++) {
@@ -127,7 +196,6 @@ function createArenaObstacles() {
         
         mesh.position.set((Math.random() - 0.5) * 180, 7.5, (Math.random() - 0.5) * 180);
         
-        // Jangan taruh pilar terlalu dekat tengah arena
         if (mesh.position.length() < 20) continue; 
         
         mesh.castShadow = true;
@@ -136,7 +204,6 @@ function createArenaObstacles() {
         obstacles.push(mesh);
     }
     
-    // Tembok Pembatas Luar
     const wallGeo = new THREE.BoxGeometry(200, 20, 2);
     const wallMat = new THREE.MeshStandardMaterial({ color: 0x111111, emissive: 0x00ffff, emissiveIntensity: 0.1 });
     
@@ -166,25 +233,24 @@ function onKeyUp(event) {
 
 function onMouseClick(event) {
     if (event.button !== 0 || !controls.isLocked) return; 
-    
+    fireWeapon();
+}
+
+function fireWeapon() {
+    if (!isPlaying) return;
     drawLaser();
 
-    // Deteksi tembakan (Raycast dari tengah kamera)
     raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-    
-    // Semua target (pemain lain)
     const targets = [];
     for(let id in playerMeshes) targets.push(playerMeshes[id]);
 
     const intersects = raycaster.intersectObjects(targets, true);
 
     if (intersects.length > 0) {
-        // Cari objek parent utama yang punya userData.id
         let hitObj = intersects[0].object;
         while(hitObj.parent && !hitObj.userData.id && hitObj.parent.type !== 'Scene') {
             hitObj = hitObj.parent;
         }
-        
         if (hitObj.userData.id) {
             socket.emit('shoot', hitObj.userData.id);
         }
@@ -193,29 +259,26 @@ function onMouseClick(event) {
 
 function drawLaser() {
     const geometry = new THREE.CylinderGeometry(0.05, 0.05, 15, 8);
-    geometry.rotateX(Math.PI / 2); // Arahkan ke depan
+    geometry.rotateX(Math.PI / 2); 
     const material = new THREE.MeshBasicMaterial({ color: 0x00ffff });
     const laser = new THREE.Mesh(geometry, material);
     
     laser.position.copy(camera.position);
-    laser.position.y -= 0.3; // Turunkan sedikit (seperti memegang senjata di bawah)
-    laser.position.x += 0.3; // Geser ke kanan
+    laser.position.y -= 0.3; 
+    laser.position.x += 0.3; 
     
     const direction = new THREE.Vector3();
     camera.getWorldDirection(direction);
     
-    laser.position.add(direction.clone().multiplyScalar(7.5)); // Majukan setengah panjang
+    laser.position.add(direction.clone().multiplyScalar(7.5)); 
     laser.quaternion.copy(camera.quaternion);
     
     scene.add(laser);
     lasers.push({ mesh: laser, dir: direction, life: 1.0 });
 }
 
-// Model Karakter Pemain Lain (Bukan cuma kubus, tapi bentuk Cyborg sederhana)
 function createPlayerMesh(playerData) {
     const group = new THREE.Group();
-    
-    // Badan (Cylinder glowing)
     const geoBody = new THREE.CylinderGeometry(0.7, 0.7, 2, 16);
     const matBody = new THREE.MeshStandardMaterial({ 
         color: playerData.color,
@@ -230,7 +293,6 @@ function createPlayerMesh(playerData) {
     body.receiveShadow = true;
     group.add(body);
     
-    // Cincin melayang di sekitar pemain
     const geoRing = new THREE.TorusGeometry(1.2, 0.05, 16, 32);
     const matRing = new THREE.MeshBasicMaterial({ color: 0xffffff });
     const ring = new THREE.Mesh(geoRing, matRing);
@@ -245,12 +307,9 @@ function createPlayerMesh(playerData) {
     return group;
 }
 
-// Deteksi Tabrakan Sederhana
 function checkCollision(newPos) {
-    // Tabrakan tembok luar
     if (newPos.x > 98 || newPos.x < -98 || newPos.z > 98 || newPos.z < -98) return true;
     
-    // Tabrakan pilar
     for(let obs of obstacles) {
         if (Math.abs(newPos.x - obs.position.x) < 2.5 && Math.abs(newPos.z - obs.position.z) < 2.5) {
             return true;
@@ -259,12 +318,8 @@ function checkCollision(newPos) {
     return false;
 }
 
-// JARINGAN SOCKET.IO /////////////////////////////
-
-socket.on('connect', () => {
-    myId = socket.id;
-});
-
+// JARINGAN SOCKET.IO
+socket.on('connect', () => { myId = socket.id; });
 socket.on('current-players', (serverPlayers) => {
     for (let id in serverPlayers) {
         if (id !== myId && !playerMeshes[id]) {
@@ -274,33 +329,19 @@ socket.on('current-players', (serverPlayers) => {
         }
     }
 });
-
 socket.on('new-player', (playerData) => {
-    if (!playerMeshes[playerData.id]) {
-        playerMeshes[playerData.id] = createPlayerMesh(playerData);
-    }
+    if (!playerMeshes[playerData.id]) playerMeshes[playerData.id] = createPlayerMesh(playerData);
 });
-
 socket.on('player-disconnected', (id) => {
-    if (playerMeshes[id]) {
-        scene.remove(playerMeshes[id]);
-        delete playerMeshes[id];
-    }
+    if (playerMeshes[id]) { scene.remove(playerMeshes[id]); delete playerMeshes[id]; }
 });
-
 socket.on('state-update', (serverPlayers) => {
     if (!isPlaying) return;
-    
     for (let id in serverPlayers) {
         if (id !== myId && playerMeshes[id]) {
-            // Pergerakan mulus (Lerp)
             playerMeshes[id].position.x += (serverPlayers[id].x - playerMeshes[id].position.x) * 0.2;
             playerMeshes[id].position.z += (serverPlayers[id].z - playerMeshes[id].position.z) * 0.2;
-            
-            // Putaran cincin (efek animasi tambahan)
             playerMeshes[id].children[1].rotation.z += 0.05;
-            
-            // Putaran badan menghadap kamera
             playerMeshes[id].rotation.y = serverPlayers[id].rotation;
         } else if (id === myId) {
             myScore = serverPlayers[id].score;
@@ -308,15 +349,12 @@ socket.on('state-update', (serverPlayers) => {
         }
     }
 });
-
 socket.on('health-update', (data) => {
     if (data.id === myId) {
         myHealth = data.health;
-        
         healthFill.style.width = Math.max(0, myHealth) + '%';
         if (myHealth <= 30) {
             healthFill.style.background = '#f00';
-            // Efek layar merah kedip
             uiLayer.style.background = 'rgba(255, 0, 0, 0.2)';
             setTimeout(() => uiLayer.style.background = 'none', 100);
         } else {
@@ -329,7 +367,6 @@ socket.on('health-update', (data) => {
         setTimeout(() => body.material.color.setHex(oriColor), 100);
     }
 });
-
 socket.on('player-killed', (data) => {
     const el = document.createElement('div');
     el.className = 'kill-msg';
@@ -342,54 +379,58 @@ socket.on('player-killed', (data) => {
         myHealth = 100;
         healthFill.style.width = '100%';
         healthFill.style.background = '#0f0';
-        
         uiLayer.style.background = 'rgba(255, 0, 0, 0.8)';
         setTimeout(() => uiLayer.style.background = 'none', 500);
     }
 });
 
-// GAME LOOP UTAMA ////////////////////////////////
+// GAME LOOP UTAMA
 function animate() {
     requestAnimationFrame(animate);
     const time = performance.now();
 
-    // Animasi Lasers
     for(let i = lasers.length - 1; i >= 0; i--) {
         const l = lasers[i];
         l.mesh.position.add(l.dir.clone().multiplyScalar(2)); 
         l.life -= 0.05;
-        if (l.life <= 0) {
-            scene.remove(l.mesh);
-            lasers.splice(i, 1);
-        }
+        if (l.life <= 0) { scene.remove(l.mesh); lasers.splice(i, 1); }
     }
 
-    if (controls.isLocked === true) {
+    if (controls.isLocked === true || isMobile) {
         const delta = (time - prevTime) / 1000;
 
-        velocity.x -= velocity.x * 10.0 * delta;
-        velocity.z -= velocity.z * 10.0 * delta;
+        if (!isMobile) {
+            velocity.x -= velocity.x * 10.0 * delta;
+            velocity.z -= velocity.z * 10.0 * delta;
 
-        direction.z = Number(moveForward) - Number(moveBackward);
-        direction.x = Number(moveRight) - Number(moveLeft);
-        direction.normalize(); 
+            direction.z = Number(moveForward) - Number(moveBackward);
+            direction.x = Number(moveRight) - Number(moveLeft);
+            direction.normalize(); 
 
-        if (moveForward || moveBackward) velocity.z -= direction.z * 100.0 * delta;
-        if (moveLeft || moveRight) velocity.x -= direction.x * 100.0 * delta;
+            if (moveForward || moveBackward) velocity.z -= direction.z * 100.0 * delta;
+            if (moveLeft || moveRight) velocity.x -= direction.x * 100.0 * delta;
+        } else {
+            // Logika HP: JoyY untuk maju/mundur, JoyX untuk kanan/kiri
+            velocity.x = joyX * 15; // Kecepatan lari joystick
+            velocity.z = -joyY * 15;
+        }
 
-        // Simpan posisi sebelum bergerak
         const currentPos = camera.position.clone();
 
-        controls.moveRight(-velocity.x * delta);
-        if (checkCollision(camera.position)) {
-            camera.position.x = currentPos.x; // Batalkan gerakan X jika nabrak
-        }
-
-        controls.moveForward(-velocity.z * delta);
-        if (checkCollision(camera.position)) {
-            camera.position.z = currentPos.z; // Batalkan gerakan Z jika nabrak
+        if (!isMobile) {
+            controls.moveRight(-velocity.x * delta);
+        } else {
+            // Manual kalkulasi gerakan relatif terhadap rotasi Y kamera (Mobile)
+            const moveDir = new THREE.Vector3(velocity.x * delta, 0, velocity.z * delta);
+            moveDir.applyEuler(new THREE.Euler(0, camera.rotation.y, 0));
+            camera.position.add(moveDir);
         }
         
+        // Cek tabrakan (Kembalikan posisi jika nabrak)
+        if (checkCollision(camera.position)) {
+            camera.position.copy(currentPos);
+        }
+
         camera.position.y = 2; // Kunci ketinggian mata
 
         socket.emit('player-movement', {

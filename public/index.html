@@ -10,6 +10,8 @@
     <!-- Three.js dan PointerLockControls -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/PointerLockControls.js"></script>
+    <!-- NippleJS untuk Virtual Joystick -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/nipplejs/0.10.1/nipplejs.min.js"></script>
 </head>
 <body>
 
@@ -23,6 +25,13 @@
             Skor: <span id="my-score">0</span>
         </div>
         <div id="kill-feed"></div>
+    </div>
+
+    <!-- Mobile Controls -->
+    <div id="mobile-controls" style="display: none;">
+        <div id="touch-look-zone"></div>
+        <div id="joystick-zone"></div>
+        <button id="shoot-btn-mobile">TEMBAK</button>
     </div>
 
     <!-- Login Menu -->
@@ -39,6 +48,6 @@
     </div>
 
     <script src="/socket.io/socket.io.js"></script>
-    <script src="script.js?v=fps2"></script>
+    <script src="script.js?v=fps3"></script>
 </body>
 </html>
