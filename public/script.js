@@ -1,8 +1,5 @@
 const socket = io('/');
 
-// Deteksi Perangkat
-const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
-
 // UI Elements
 const loginMenu = document.getElementById('login-menu');
 const usernameInput = document.getElementById('username-input');
@@ -11,9 +8,6 @@ const uiLayer = document.getElementById('ui-layer');
 const healthFill = document.getElementById('health-fill');
 const myScoreEl = document.getElementById('my-score');
 const killFeed = document.getElementById('kill-feed');
-const mobileControls = document.getElementById('mobile-controls');
-const shootBtnMobile = document.getElementById('shoot-btn-mobile');
-const lookZone = document.getElementById('touch-look-zone');
 
 // Game State
 let myId = null;
@@ -25,7 +19,6 @@ const obstacles = [];
 const lasers = [];
 let scene, camera, renderer, controls, raycaster;
 let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
-let joyX = 0, joyY = 0; // Untuk Joystick HP
 let prevTime = performance.now();
 const velocity = new THREE.Vector3();
 const direction = new THREE.Vector3();
@@ -36,12 +29,6 @@ joinBtn.addEventListener('click', () => {
     socket.emit('join-game', username);
     loginMenu.style.display = 'none';
     uiLayer.style.display = 'block';
-    
-    // Tampilkan UI HP jika diperlukan
-    if (isMobile) {
-        mobileControls.style.display = 'block';
-        initMobileControls();
-    }
     
     initThreeJS();
     isPlaying = true;
@@ -63,20 +50,11 @@ function initThreeJS() {
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     document.body.appendChild(renderer.domElement);
 
-    // 4. Controls (Hanya PC yang pakai PointerLock)
-    if (!isMobile) {
-        controls = new THREE.PointerLockControls(camera, document.body);
-        document.addEventListener('click', () => {
-            if (isPlaying) controls.lock();
-        });
-        document.addEventListener('mousedown', onMouseClick); // Tembak PC
-    } else {
-        // Objek dummy untuk kompalibilitas kode PC
-        controls = { isLocked: true, moveRight: () => {}, moveForward: () => {} };
-        // Kamera agak tinggi di awal
-        camera.position.y = 2;
-        camera.rotation.order = "YXZ"; // Penting untuk touch look FPS
-    }
+    // 4. Controls (PointerLock Khusus PC)
+    controls = new THREE.PointerLockControls(camera, document.body);
+    document.addEventListener('click', () => {
+        if (isPlaying) controls.lock();
+    });
 
     raycaster = new THREE.Raycaster();
 
@@ -123,62 +101,13 @@ function initThreeJS() {
     // 8. Tambahkan Pilar Rintangan Neon
     createArenaObstacles();
 
-    // Input WASD (PC)
-    if (!isMobile) {
-        document.addEventListener('keydown', onKeyDown);
-        document.addEventListener('keyup', onKeyUp);
-    }
+    // Input WASD
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keyup', onKeyUp);
+    document.addEventListener('mousedown', onMouseClick); // Tembak
 
     // Mulai Render
     animate();
-}
-
-function initMobileControls() {
-    // 1. Virtual Joystick (Nipple.js)
-    const joyManager = nipplejs.create({
-        zone: document.getElementById('joystick-zone'),
-        mode: 'static',
-        position: { left: '50%', top: '50%' },
-        color: 'cyan'
-    });
-
-    joyManager.on('move', (evt, data) => {
-        // force max = 2. kita normalize
-        const force = Math.min(data.force, 2) / 2;
-        joyX = Math.cos(data.angle.radian) * force;
-        joyY = Math.sin(data.angle.radian) * force;
-    });
-
-    joyManager.on('end', () => {
-        joyX = 0; joyY = 0;
-    });
-
-    // 2. Touch Look (Kamera putar pakai jempol kanan)
-    let touchStartX, touchStartY;
-    let camStartX, camStartY;
-    
-    lookZone.addEventListener('touchstart', (e) => {
-        touchStartX = e.touches[0].pageX;
-        touchStartY = e.touches[0].pageY;
-        camStartX = camera.rotation.y;
-        camStartY = camera.rotation.x;
-    });
-
-    lookZone.addEventListener('touchmove', (e) => {
-        e.preventDefault(); // Biar gak ketarik scroll web
-        const deltaX = e.touches[0].pageX - touchStartX;
-        const deltaY = e.touches[0].pageY - touchStartY;
-        
-        // Atur rotasi kamera (Yaw dan Pitch)
-        camera.rotation.y = camStartX - (deltaX * 0.005);
-        camera.rotation.x = Math.max(-Math.PI/2, Math.min(Math.PI/2, camStartY - (deltaY * 0.005)));
-    }, { passive: false });
-
-    // 3. Tombol Tembak
-    shootBtnMobile.addEventListener('touchstart', (e) => {
-        e.preventDefault();
-        fireWeapon();
-    });
 }
 
 function createArenaObstacles() {
@@ -233,14 +162,11 @@ function onKeyUp(event) {
 
 function onMouseClick(event) {
     if (event.button !== 0 || !controls.isLocked) return; 
-    fireWeapon();
-}
-
-function fireWeapon() {
-    if (!isPlaying) return;
+    
     drawLaser();
 
     raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    
     const targets = [];
     for(let id in playerMeshes) targets.push(playerMeshes[id]);
 
@@ -251,6 +177,7 @@ function fireWeapon() {
         while(hitObj.parent && !hitObj.userData.id && hitObj.parent.type !== 'Scene') {
             hitObj = hitObj.parent;
         }
+        
         if (hitObj.userData.id) {
             socket.emit('shoot', hitObj.userData.id);
         }
@@ -279,6 +206,7 @@ function drawLaser() {
 
 function createPlayerMesh(playerData) {
     const group = new THREE.Group();
+    
     const geoBody = new THREE.CylinderGeometry(0.7, 0.7, 2, 16);
     const matBody = new THREE.MeshStandardMaterial({ 
         color: playerData.color,
@@ -337,6 +265,7 @@ socket.on('player-disconnected', (id) => {
 });
 socket.on('state-update', (serverPlayers) => {
     if (!isPlaying) return;
+    
     for (let id in serverPlayers) {
         if (id !== myId && playerMeshes[id]) {
             playerMeshes[id].position.x += (serverPlayers[id].x - playerMeshes[id].position.x) * 0.2;
@@ -396,38 +325,24 @@ function animate() {
         if (l.life <= 0) { scene.remove(l.mesh); lasers.splice(i, 1); }
     }
 
-    if (controls.isLocked === true || isMobile) {
+    if (controls.isLocked === true) {
         const delta = (time - prevTime) / 1000;
 
-        if (!isMobile) {
-            velocity.x -= velocity.x * 10.0 * delta;
-            velocity.z -= velocity.z * 10.0 * delta;
+        velocity.x -= velocity.x * 10.0 * delta;
+        velocity.z -= velocity.z * 10.0 * delta;
 
-            direction.z = Number(moveForward) - Number(moveBackward);
-            direction.x = Number(moveRight) - Number(moveLeft);
-            direction.normalize(); 
+        direction.z = Number(moveForward) - Number(moveBackward);
+        direction.x = Number(moveRight) - Number(moveLeft);
+        direction.normalize(); 
 
-            if (moveForward || moveBackward) velocity.z -= direction.z * 100.0 * delta;
-            if (moveLeft || moveRight) velocity.x -= direction.x * 100.0 * delta;
-        } else {
-            // Logika HP: JoyY untuk maju/mundur, JoyX untuk kanan/kiri
-            velocity.x = joyX * 15; // Kecepatan lari joystick
-            velocity.z = -joyY * 15;
-        }
+        if (moveForward || moveBackward) velocity.z -= direction.z * 100.0 * delta;
+        if (moveLeft || moveRight) velocity.x -= direction.x * 100.0 * delta;
 
         const currentPos = camera.position.clone();
 
-        if (!isMobile) {
-            controls.moveRight(-velocity.x * delta);
-            controls.moveForward(-velocity.z * delta);
-        } else {
-            // Manual kalkulasi gerakan relatif terhadap rotasi Y kamera (Mobile)
-            const moveDir = new THREE.Vector3(velocity.x * delta, 0, velocity.z * delta);
-            moveDir.applyEuler(new THREE.Euler(0, camera.rotation.y, 0));
-            camera.position.add(moveDir);
-        }
+        controls.moveRight(-velocity.x * delta);
+        controls.moveForward(-velocity.z * delta);
         
-        // Cek tabrakan (Kembalikan posisi jika nabrak)
         if (checkCollision(camera.position)) {
             camera.position.copy(currentPos);
         }
