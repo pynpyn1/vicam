@@ -229,7 +229,13 @@ function createPlayerMesh(playerData) {
     group.add(ring);
     
     group.position.set(playerData.x, 0, playerData.z);
-    group.userData = { id: playerData.id };
+    
+    // Simpan data unik untuk keperluan animasi
+    group.userData = { 
+        id: playerData.id,
+        randomSeed: Math.random() * 100, // Supaya animasi tiap orang beda-beda
+        isMoving: false 
+    };
     
     scene.add(group);
     return group;
@@ -268,9 +274,16 @@ socket.on('state-update', (serverPlayers) => {
     
     for (let id in serverPlayers) {
         if (id !== myId && playerMeshes[id]) {
+            const oldX = playerMeshes[id].position.x;
+            const oldZ = playerMeshes[id].position.z;
+
             playerMeshes[id].position.x += (serverPlayers[id].x - playerMeshes[id].position.x) * 0.2;
             playerMeshes[id].position.z += (serverPlayers[id].z - playerMeshes[id].position.z) * 0.2;
-            playerMeshes[id].children[1].rotation.z += 0.05;
+            
+            // Hitung kecepatan untuk tahu dia sedang jalan atau diam
+            const dist = Math.hypot(playerMeshes[id].position.x - oldX, playerMeshes[id].position.z - oldZ);
+            playerMeshes[id].userData.isMoving = dist > 0.02;
+
             playerMeshes[id].rotation.y = serverPlayers[id].rotation;
         } else if (id === myId) {
             myScore = serverPlayers[id].score;
@@ -317,6 +330,36 @@ socket.on('player-killed', (data) => {
 function animate() {
     requestAnimationFrame(animate);
     const time = performance.now();
+
+    // --- ANIMASI KARAKTER (Musuh) ---
+    for (let id in playerMeshes) {
+        const mesh = playerMeshes[id];
+        const body = mesh.children[0];
+        const ring = mesh.children[1];
+        
+        // Cincin selalu berputar kencang
+        ring.rotation.z -= 0.05;
+        
+        // Efek melayang perlahan secara default (Hovering)
+        const hoverOffset = Math.sin(time * 0.003 + mesh.userData.randomSeed) * 0.15;
+        
+        if (mesh.userData.isMoving) {
+            // Efek Bobbing saat lari (Naik Turun Cepat)
+            const bobOffset = Math.abs(Math.sin(time * 0.015)) * 0.3;
+            body.position.y = 1 + bobOffset + hoverOffset;
+            ring.position.y = 0.5 + bobOffset + hoverOffset;
+            
+            // Goyangan miring kanan-kiri (Langkah kaki)
+            body.rotation.z = Math.sin(time * 0.01) * 0.15;
+        } else {
+            // Saat diam (hanya melayang)
+            body.position.y = 1 + hoverOffset;
+            ring.position.y = 0.5 + hoverOffset;
+            
+            // Luruskan kembali badannya
+            body.rotation.z += (0 - body.rotation.z) * 0.1;
+        }
+    }
 
     for(let i = lasers.length - 1; i >= 0; i--) {
         const l = lasers[i];
