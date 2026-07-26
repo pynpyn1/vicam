@@ -141,6 +141,12 @@ function addVideoStream(video, stream, userId) {
     if (document.getElementById(`video-wrapper-${userId}`)) return;
 
     video.srcObject = stream;
+    
+    // Paksa video untuk memutar (Penting untuk HP / iOS Safari)
+    video.addEventListener('loadedmetadata', () => {
+        video.play().catch(e => console.error("Auto-play prevented:", e));
+    });
+
     if (userId === 'local' || userId === 'local-screen') {
         video.muted = true;
     }
