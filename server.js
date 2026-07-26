@@ -78,6 +78,19 @@ io.on('connection', (socket) => {
         }
     });
 
+    // WebRTC Signaling untuk Voice Chat
+    socket.on('voice-offer', (payload) => {
+        io.to(payload.target).emit('voice-offer', { caller: socket.id, sdp: payload.sdp });
+    });
+
+    socket.on('voice-answer', (payload) => {
+        io.to(payload.target).emit('voice-answer', { caller: socket.id, sdp: payload.sdp });
+    });
+
+    socket.on('voice-candidate', (payload) => {
+        io.to(payload.target).emit('voice-candidate', { caller: socket.id, candidate: payload.candidate });
+    });
+
     // Disconnect
     socket.on('disconnect', () => {
         console.log(`Player disconnected: ${socket.id}`);

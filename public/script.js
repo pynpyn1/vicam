@@ -24,7 +24,10 @@ const velocity = new THREE.Vector3();
 const direction = new THREE.Vector3();
 
 // Inisialisasi Game
-joinBtn.addEventListener('click', () => {
+joinBtn.addEventListener('click', async () => {
+    // 0. Minta Izin Microphone
+    await initVoiceChat();
+
     const username = usernameInput.value.trim() || 'Player';
     socket.emit('join-game', username);
     loginMenu.style.display = 'none';
@@ -263,11 +266,22 @@ socket.on('current-players', (serverPlayers) => {
         }
     }
 });
-socket.on('new-player', (playerData) => {
+socket.on('new-player', async (playerData) => {
     if (!playerMeshes[playerData.id]) playerMeshes[playerData.id] = createPlayerMesh(playerData);
+    
+    // Saat ada pemain baru bergabung, KITA yang membuat penawaran (offer) koneksi audio ke dia
+    const pc = createPeerConnection(playerData.id);
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+    socket.emit('voice-offer', { target: playerData.id, sdp: offer });
 });
 socket.on('player-disconnected', (id) => {
     if (playerMeshes[id]) { scene.remove(playerMeshes[id]); delete playerMeshes[id]; }
+    
+    // Hapus koneksi audio
+    if (peers[id]) { peers[id].close(); delete peers[id]; }
+    const audioEl = document.getElementById('audio-' + id);
+    if (audioEl) audioEl.remove();
 });
 socket.on('state-update', (serverPlayers) => {
     if (!isPlaying) return;
@@ -409,5 +423,84 @@ window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
+    }
+});
+
+// --- WEBRTC VOICE CHAT ---
+const peers = {};
+let localAudioStream;
+const audioContainer = document.getElementById('audio-container');
+
+const iceServers = {
+    iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'turn:openrelay.metered.ca:80', username: 'openrelayproject', credential: 'openrelayproject' },
+        { urls: 'turn:openrelay.metered.ca:443', username: 'openrelayproject', credential: 'openrelayproject' }
+    ]
+};
+
+async function initVoiceChat() {
+    try {
+        localAudioStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        console.log("Microphone connected!");
+    } catch(err) {
+        console.warn("Microphone access denied or not available", err);
+    }
+}
+
+function createPeerConnection(targetId) {
+    const pc = new RTCPeerConnection(iceServers);
+    peers[targetId] = pc;
+
+    if (localAudioStream) {
+        localAudioStream.getTracks().forEach(track => {
+            pc.addTrack(track, localAudioStream);
+        });
+    }
+
+    pc.onicecandidate = (event) => {
+        if (event.candidate) {
+            socket.emit('voice-candidate', { target: targetId, candidate: event.candidate });
+        }
+    };
+
+    pc.ontrack = (event) => {
+        // Buat elemen audio jika belum ada
+        let audioEl = document.getElementById('audio-' + targetId);
+        if (!audioEl) {
+            audioEl = document.createElement('audio');
+            audioEl.id = 'audio-' + targetId;
+            audioEl.autoplay = true;
+            audioContainer.appendChild(audioEl);
+        }
+        audioEl.srcObject = event.streams[0];
+    };
+
+    return pc;
+}
+
+// Menerima penawaran Voice Chat dari pemain lain
+socket.on('voice-offer', async (payload) => {
+    const pc = createPeerConnection(payload.caller);
+    await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+    const answer = await pc.createAnswer();
+    await pc.setLocalDescription(answer);
+    socket.emit('voice-answer', { target: payload.caller, sdp: answer });
+});
+
+// Menerima jawaban Voice Chat
+socket.on('voice-answer', async (payload) => {
+    const pc = peers[payload.caller];
+    if (pc) {
+        await pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
+    }
+});
+
+// Menerima jalur jaringan (ICE)
+socket.on('voice-candidate', async (payload) => {
+    const pc = peers[payload.caller];
+    if (pc) {
+        await pc.addIceCandidate(new RTCIceCandidate(payload.candidate));
     }
 });
