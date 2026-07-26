@@ -29,12 +29,22 @@ io.on('connection', (socket) => {
     });
 
     socket.on('ice-candidate', (incoming) => {
-        io.to(incoming.target).emit('ice-candidate', incoming.candidate, socket.id);
+        // Route ICE candidate based on the actual target (strip -screen if present but keep original caller context)
+        const actualTarget = incoming.target.replace('-screen', '');
+        io.to(actualTarget).emit('ice-candidate', incoming.candidate, incoming.caller);
+    });
+
+    socket.on('stop-screen-share', (screenId) => {
+        if (currentRoom) {
+            socket.to(currentRoom).emit('user-disconnected', screenId);
+        }
     });
 
     socket.on('disconnect', () => {
         if (currentRoom) {
             socket.to(currentRoom).emit('user-disconnected', socket.id);
+            // Also disconnect their screen if active
+            socket.to(currentRoom).emit('user-disconnected', socket.id + '-screen');
         }
     });
 });

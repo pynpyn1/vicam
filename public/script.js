@@ -1,6 +1,7 @@
 const socket = io('/');
 const videoGrid = document.getElementById('video-grid');
-const peers = {};
+const peers = {}; // Camera peers
+const screenPeers = {}; // Screen peers (outgoing)
 let localStream;
 
 const iceServers = {
@@ -18,6 +19,7 @@ navigator.mediaDevices.getUserMedia({
     addVideoStream(createVideoElement(), stream, 'local');
 
     socket.on('user-connected', async (userId) => {
+        // Create connection for camera
         const peerConnection = createPeerConnection(userId);
         peers[userId] = peerConnection;
 
@@ -32,37 +34,56 @@ navigator.mediaDevices.getUserMedia({
             caller: socket.id,
             sdp: peerConnection.localDescription
         });
+
+        // If we are sharing our screen, also send a screen offer to this new user
+        if (isScreenSharing && screenStream) {
+            connectScreenToUser(userId);
+        }
     });
 
     socket.on('offer', async (payload) => {
         const peerConnection = createPeerConnection(payload.caller);
+        
+        // Receiver just stores it in `peers` regardless if it's a camera or screen
         peers[payload.caller] = peerConnection;
 
         await peerConnection.setRemoteDescription(new RTCSessionDescription(payload.sdp));
 
-        localStream.getTracks().forEach(track => {
-            peerConnection.addTrack(track, localStream);
-        });
+        // Only send back our camera track if this is a standard camera call
+        if (!payload.caller.endsWith('-screen')) {
+            localStream.getTracks().forEach(track => {
+                peerConnection.addTrack(track, localStream);
+            });
+        }
 
         const answer = await peerConnection.createAnswer();
         await peerConnection.setLocalDescription(answer);
 
+        // Send answer back to the actual socket id, but tell them it's for their specific caller context
+        const actualTarget = payload.caller.replace('-screen', '');
         socket.emit('answer', {
-            target: payload.caller,
+            target: actualTarget,
             caller: socket.id,
-            sdp: peerConnection.localDescription
+            sdp: peerConnection.localDescription,
+            answerFor: payload.caller
         });
     });
 
     socket.on('answer', async (payload) => {
-        const peerConnection = peers[payload.caller];
+        let peerConnection;
+        if (payload.answerFor && payload.answerFor.endsWith('-screen')) {
+             peerConnection = screenPeers[payload.caller]; 
+        } else {
+             peerConnection = peers[payload.caller];
+        }
+        
         if (peerConnection) {
             await peerConnection.setRemoteDescription(new RTCSessionDescription(payload.sdp));
         }
     });
 
     socket.on('ice-candidate', async (incomingCandidate, callerId) => {
-        const peerConnection = peers[callerId];
+        const peerConnection = peers[callerId] || screenPeers[callerId];
         if (peerConnection) {
             try {
                 await peerConnection.addIceCandidate(new RTCIceCandidate(incomingCandidate));
@@ -79,6 +100,7 @@ navigator.mediaDevices.getUserMedia({
 });
 
 socket.on('user-disconnected', userId => {
+    // Remove camera peer if exists
     if (peers[userId]) {
         peers[userId].close();
         delete peers[userId];
@@ -87,7 +109,7 @@ socket.on('user-disconnected', userId => {
     if (videoWrapper) videoWrapper.remove();
 });
 
-function createPeerConnection(userId) {
+function createPeerConnection(userId, isScreenOutbound = false) {
     const peerConnection = new RTCPeerConnection(iceServers);
     const video = createVideoElement();
 
@@ -95,7 +117,8 @@ function createPeerConnection(userId) {
         if (event.candidate) {
             socket.emit('ice-candidate', {
                 target: userId,
-                candidate: event.candidate
+                candidate: event.candidate,
+                caller: socket.id + (isScreenOutbound ? '-screen' : '')
             });
         }
     };
@@ -118,19 +141,28 @@ function addVideoStream(video, stream, userId) {
     if (document.getElementById(`video-wrapper-${userId}`)) return;
 
     video.srcObject = stream;
-    if (userId === 'local') video.muted = true;
+    if (userId === 'local' || userId === 'local-screen') {
+        video.muted = true;
+    }
 
     const videoWrapper = document.createElement('div');
     videoWrapper.className = 'video-container';
     videoWrapper.id = `video-wrapper-${userId}`;
-    videoWrapper.append(video);
     
+    // Style differently if it's a screen share
+    if (userId.endsWith('-screen')) {
+        videoWrapper.classList.add('screen-share-view');
+    }
+    
+    videoWrapper.append(video);
     videoGrid.append(videoWrapper);
 }
 
 // UI Controls
 const toggleAudioBtn = document.getElementById('toggle-audio');
 const toggleVideoBtn = document.getElementById('toggle-video');
+const switchCameraBtn = document.getElementById('switch-camera');
+const shareScreenBtn = document.getElementById('share-screen');
 const leaveBtn = document.getElementById('leave-btn');
 
 toggleAudioBtn.addEventListener('click', () => {
@@ -151,31 +183,29 @@ toggleVideoBtn.addEventListener('click', () => {
     toggleVideoBtn.classList.toggle('muted', !videoTrack.enabled);
 });
 
-const switchCameraBtn = document.getElementById('switch-camera');
-const shareScreenBtn = document.getElementById('share-screen');
-
 let currentFacingMode = 'user';
 let isScreenSharing = false;
 let screenStream = null;
 
 switchCameraBtn.addEventListener('click', async () => {
-    if (isScreenSharing) return; // Don't switch camera while sharing screen
-    
     currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
     
     try {
         const newStream = await navigator.mediaDevices.getUserMedia({
             video: { facingMode: currentFacingMode },
-            audio: false // We keep the existing audio track
+            audio: false 
         });
         
         const oldVideoTrack = localStream.getVideoTracks()[0];
         const newVideoTrack = newStream.getVideoTracks()[0];
         
-        // Replace video track in all active peer connections
+        // Replace video track in all active camera peer connections
         for (let userId in peers) {
-            const sender = peers[userId].getSenders().find(s => s.track.kind === 'video');
-            if (sender) sender.replaceTrack(newVideoTrack);
+            // Only replace in actual camera peers, not screen peers
+            if (!userId.endsWith('-screen')) {
+                const sender = peers[userId].getSenders().find(s => s.track && s.track.kind === 'video');
+                if (sender) sender.replaceTrack(newVideoTrack);
+            }
         }
         
         // Update local stream
@@ -187,7 +217,6 @@ switchCameraBtn.addEventListener('click', async () => {
         const localVideo = document.querySelector('#video-wrapper-local video');
         if (localVideo) localVideo.srcObject = localStream;
         
-        // Ensure UI toggle reflects new track state
         newVideoTrack.enabled = !toggleVideoBtn.classList.contains('muted');
         
     } catch (err) {
@@ -209,26 +238,44 @@ shareScreenBtn.addEventListener('click', async () => {
                 stopScreenSharing();
             };
             
-            // Replace video track in all active peer connections
-            for (let userId in peers) {
-                const sender = peers[userId].getSenders().find(s => s.track.kind === 'video');
-                if (sender) sender.replaceTrack(screenTrack);
-            }
+            // Show screen locally
+            addVideoStream(createVideoElement(), screenStream, 'local-screen');
             
-            // Update UI to show screen locally
-            const localVideo = document.querySelector('#video-wrapper-local video');
-            if (localVideo) localVideo.srcObject = screenStream;
+            // Create new peer connections just for the screen to all existing users
+            for (let userId in peers) {
+                if (!userId.endsWith('-screen')) {
+                    connectScreenToUser(userId);
+                }
+            }
             
             shareScreenBtn.classList.add('active-share');
             
         } catch (err) {
             console.error('Failed to share screen', err);
-            alert('Gagal berbagi layar. Pastikan Anda menggunakan laptop/PC dan URL memiliki gembok hijau (HTTPS). Fitur ini ditolak oleh browser Anda.');
+            alert('Gagal berbagi layar. Pastikan Anda menggunakan laptop/PC dan URL memiliki gembok hijau (HTTPS).');
         }
     } else {
         stopScreenSharing();
     }
 });
+
+async function connectScreenToUser(userId) {
+    const screenPeer = createPeerConnection(userId, true); // true = isScreenOutbound
+    screenPeers[userId] = screenPeer;
+    
+    screenStream.getTracks().forEach(track => {
+        screenPeer.addTrack(track, screenStream);
+    });
+    
+    const offer = await screenPeer.createOffer();
+    await screenPeer.setLocalDescription(offer);
+    
+    socket.emit('offer', {
+        target: userId,
+        caller: socket.id + '-screen',
+        sdp: screenPeer.localDescription
+    });
+}
 
 function stopScreenSharing() {
     if (!isScreenSharing) return;
@@ -238,17 +285,18 @@ function stopScreenSharing() {
         screenStream.getTracks().forEach(track => track.stop());
     }
     
-    const cameraTrack = localStream.getVideoTracks()[0];
-    
-    // Revert back to camera track in all peer connections
-    for (let userId in peers) {
-        const sender = peers[userId].getSenders().find(s => s.track.kind === 'video');
-        if (sender) sender.replaceTrack(cameraTrack);
+    // Close all screen peer connections
+    for (let userId in screenPeers) {
+        screenPeers[userId].close();
+        delete screenPeers[userId];
     }
     
-    // Revert local UI
-    const localVideo = document.querySelector('#video-wrapper-local video');
-    if (localVideo) localVideo.srcObject = localStream;
+    // Remove local screen UI
+    const localScreenWrapper = document.getElementById('video-wrapper-local-screen');
+    if (localScreenWrapper) localScreenWrapper.remove();
+    
+    // Tell server we stopped screen sharing so others can remove our screen video
+    socket.emit('stop-screen-share', socket.id + '-screen');
     
     shareScreenBtn.classList.remove('active-share');
 }
