@@ -140,6 +140,11 @@ video {
     color: var(--danger);
 }
 
+.control-btn.active-share {
+    background-color: var(--accent);
+    color: white;
+}
+
 .leave-btn {
     background-color: var(--danger);
     color: white;

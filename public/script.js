@@ -151,9 +151,113 @@ toggleVideoBtn.addEventListener('click', () => {
     toggleVideoBtn.classList.toggle('muted', !videoTrack.enabled);
 });
 
+const switchCameraBtn = document.getElementById('switch-camera');
+const shareScreenBtn = document.getElementById('share-screen');
+
+let currentFacingMode = 'user';
+let isScreenSharing = false;
+let screenStream = null;
+
+switchCameraBtn.addEventListener('click', async () => {
+    if (isScreenSharing) return; // Don't switch camera while sharing screen
+    
+    currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
+    
+    try {
+        const newStream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: currentFacingMode },
+            audio: false // We keep the existing audio track
+        });
+        
+        const oldVideoTrack = localStream.getVideoTracks()[0];
+        const newVideoTrack = newStream.getVideoTracks()[0];
+        
+        // Replace video track in all active peer connections
+        for (let userId in peers) {
+            const sender = peers[userId].getSenders().find(s => s.track.kind === 'video');
+            if (sender) sender.replaceTrack(newVideoTrack);
+        }
+        
+        // Update local stream
+        localStream.removeTrack(oldVideoTrack);
+        localStream.addTrack(newVideoTrack);
+        oldVideoTrack.stop();
+        
+        // Update UI
+        const localVideo = document.querySelector('#video-wrapper-local video');
+        if (localVideo) localVideo.srcObject = localStream;
+        
+        // Ensure UI toggle reflects new track state
+        newVideoTrack.enabled = !toggleVideoBtn.classList.contains('muted');
+        
+    } catch (err) {
+        console.error('Failed to switch camera', err);
+        alert('Gagal mengganti kamera. Mungkin perangkat Anda hanya memiliki satu kamera.');
+    }
+});
+
+shareScreenBtn.addEventListener('click', async () => {
+    if (!isScreenSharing) {
+        try {
+            screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
+            isScreenSharing = true;
+            
+            const screenTrack = screenStream.getVideoTracks()[0];
+            
+            // Listen for native "Stop Sharing" button from browser UI
+            screenTrack.onended = () => {
+                stopScreenSharing();
+            };
+            
+            // Replace video track in all active peer connections
+            for (let userId in peers) {
+                const sender = peers[userId].getSenders().find(s => s.track.kind === 'video');
+                if (sender) sender.replaceTrack(screenTrack);
+            }
+            
+            // Update UI to show screen locally
+            const localVideo = document.querySelector('#video-wrapper-local video');
+            if (localVideo) localVideo.srcObject = screenStream;
+            
+            shareScreenBtn.classList.add('active-share');
+            
+        } catch (err) {
+            console.error('Failed to share screen', err);
+        }
+    } else {
+        stopScreenSharing();
+    }
+});
+
+function stopScreenSharing() {
+    if (!isScreenSharing) return;
+    isScreenSharing = false;
+    
+    if (screenStream) {
+        screenStream.getTracks().forEach(track => track.stop());
+    }
+    
+    const cameraTrack = localStream.getVideoTracks()[0];
+    
+    // Revert back to camera track in all peer connections
+    for (let userId in peers) {
+        const sender = peers[userId].getSenders().find(s => s.track.kind === 'video');
+        if (sender) sender.replaceTrack(cameraTrack);
+    }
+    
+    // Revert local UI
+    const localVideo = document.querySelector('#video-wrapper-local video');
+    if (localVideo) localVideo.srcObject = localStream;
+    
+    shareScreenBtn.classList.remove('active-share');
+}
+
 leaveBtn.addEventListener('click', () => {
     if (localStream) {
         localStream.getTracks().forEach(track => track.stop());
+    }
+    if (screenStream) {
+        screenStream.getTracks().forEach(track => track.stop());
     }
     socket.disconnect();
     document.body.innerHTML = '<div class="leave-message">Panggilan diakhiri.</div>';
