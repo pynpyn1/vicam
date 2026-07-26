@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Video Meeting</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <header class="header">
+            <div class="logo">
+                <i class="fa-solid fa-video"></i>
+                <span>Meeting Room</span>
+            </div>
+        </header>
+
+        <main class="video-grid-container">
+            <div id="video-grid" class="video-grid"></div>
+        </main>
+
+        <div class="controls-wrapper">
+            <div class="controls">
+                <button id="toggle-audio" class="control-btn" title="Mic">
+                    <i class="fa-solid fa-microphone"></i>
+                </button>
+                <button id="toggle-video" class="control-btn" title="Camera">
+                    <i class="fa-solid fa-video"></i>
+                </button>
+                <button id="leave-btn" class="control-btn leave-btn" title="Leave">
+                    <i class="fa-solid fa-phone-slash"></i>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/socket.io/socket.io.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
