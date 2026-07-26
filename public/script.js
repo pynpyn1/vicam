@@ -192,7 +192,7 @@ switchCameraBtn.addEventListener('click', async () => {
         
     } catch (err) {
         console.error('Failed to switch camera', err);
-        alert('Gagal mengganti kamera. Mungkin perangkat Anda hanya memiliki satu kamera.');
+        alert('Gagal mengganti kamera. Pastikan browser mengizinkan kamera dan Anda menggunakan perangkat dengan lebih dari 1 kamera.');
     }
 });
 
@@ -223,6 +223,7 @@ shareScreenBtn.addEventListener('click', async () => {
             
         } catch (err) {
             console.error('Failed to share screen', err);
+            alert('Gagal berbagi layar. Pastikan Anda menggunakan laptop/PC dan URL memiliki gembok hijau (HTTPS). Fitur ini ditolak oleh browser Anda.');
         }
     } else {
         stopScreenSharing();
