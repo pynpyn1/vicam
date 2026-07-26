@@ -11,43 +11,85 @@ app.get('/', (req, res) => {
     res.sendFile(__dirname + '/public/index.html');
 });
 
+// Game State
+const players = {};
+
 io.on('connection', (socket) => {
-    let currentRoom = '';
-    
-    socket.on('join-room', (roomId) => {
-        currentRoom = roomId;
-        socket.join(roomId);
-        socket.to(roomId).emit('user-connected', socket.id);
-    });
-    
-    socket.on('offer', (payload) => {
-        io.to(payload.target).emit('offer', payload);
+    console.log(`Player connected: ${socket.id}`);
+
+    // Kapan player bergabung ke arena
+    socket.on('join-game', (username) => {
+        players[socket.id] = {
+            id: socket.id,
+            username: username || 'Player',
+            x: (Math.random() - 0.5) * 20,
+            y: 1, // Ketinggian kubus
+            z: (Math.random() - 0.5) * 20,
+            rotation: 0,
+            health: 100,
+            score: 0,
+            color: Math.floor(Math.random()*16777215) // Warna acak
+        };
+
+        // Beritahu player yang baru join tentang semua player yang ada
+        socket.emit('current-players', players);
+
+        // Beritahu player lain bahwa ada player baru
+        socket.broadcast.emit('new-player', players[socket.id]);
     });
 
-    socket.on('answer', (payload) => {
-        io.to(payload.target).emit('answer', payload);
-    });
-
-    socket.on('ice-candidate', (incoming) => {
-        // Route ICE candidate based on the actual target (strip -screen if present but keep original caller context)
-        const actualTarget = incoming.target.replace('-screen', '');
-        io.to(actualTarget).emit('ice-candidate', incoming.candidate, incoming.caller);
-    });
-
-    socket.on('stop-screen-share', (screenId) => {
-        if (currentRoom) {
-            socket.to(currentRoom).emit('user-disconnected', screenId);
+    // Pergerakan player
+    socket.on('player-movement', (movementData) => {
+        if (players[socket.id]) {
+            players[socket.id].x = movementData.x;
+            players[socket.id].y = movementData.y;
+            players[socket.id].z = movementData.z;
+            players[socket.id].rotation = movementData.rotation;
         }
     });
 
+    // Menembak
+    socket.on('shoot', (targetId) => {
+        if (players[targetId] && players[socket.id]) {
+            players[targetId].health -= 25; // Damage per tembakan
+
+            if (players[targetId].health <= 0) {
+                // Target mati
+                players[socket.id].score += 1;
+                
+                // Respawn target
+                players[targetId].health = 100;
+                players[targetId].x = (Math.random() - 0.5) * 20;
+                players[targetId].z = (Math.random() - 0.5) * 20;
+
+                io.emit('player-killed', {
+                    killer: players[socket.id].username,
+                    victim: players[targetId].username,
+                    victimId: targetId,
+                    newPos: { x: players[targetId].x, z: players[targetId].z }
+                });
+            }
+
+            // Broadcast update health
+            io.emit('health-update', {
+                id: targetId,
+                health: players[targetId].health
+            });
+        }
+    });
+
+    // Disconnect
     socket.on('disconnect', () => {
-        if (currentRoom) {
-            socket.to(currentRoom).emit('user-disconnected', socket.id);
-            // Also disconnect their screen if active
-            socket.to(currentRoom).emit('user-disconnected', socket.id + '-screen');
-        }
+        console.log(`Player disconnected: ${socket.id}`);
+        delete players[socket.id];
+        io.emit('player-disconnected', socket.id);
     });
 });
 
+// Update loop server: kirim posisi semua orang ke semua orang 20 kali per detik
+setInterval(() => {
+    io.emit('state-update', players);
+}, 50); // 50ms = 20 fps server tick
+
 const PORT = process.env.PORT || 3003;
-server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+server.listen(PORT, () => console.log(`Game Server running on port ${PORT}`));

@@ -1,340 +1,291 @@
 const socket = io('/');
-const videoGrid = document.getElementById('video-grid');
-const peers = {}; // Camera peers
-const screenPeers = {}; // Screen peers (outgoing)
-let localStream;
 
-const iceServers = {
-    iceServers: [
-        { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        {
-            urls: 'turn:openrelay.metered.ca:80',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-        },
-        {
-            urls: 'turn:openrelay.metered.ca:443',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-        },
-        {
-            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
-            username: 'openrelayproject',
-            credential: 'openrelayproject'
-        }
-    ]
-};
+// UI Elements
+const loginMenu = document.getElementById('login-menu');
+const usernameInput = document.getElementById('username-input');
+const joinBtn = document.getElementById('join-btn');
+const uiLayer = document.getElementById('ui-layer');
+const healthFill = document.getElementById('health-fill');
+const myScoreEl = document.getElementById('my-score');
+const killFeed = document.getElementById('kill-feed');
 
-navigator.mediaDevices.getUserMedia({
-    video: true,
-    audio: true
-}).then(stream => {
-    localStream = stream;
-    addVideoStream(createVideoElement(), stream, 'local');
+// Game State
+let myId = null;
+let myHealth = 100;
+let myScore = 0;
+let isPlaying = false;
+const playerMeshes = {}; // Kumpulan 3D Object pemain lain
+let scene, camera, renderer, controls, raycaster;
+let moveForward = false, moveBackward = false, moveLeft = false, moveRight = false;
+let prevTime = performance.now();
+const velocity = new THREE.Vector3();
+const direction = new THREE.Vector3();
 
-    socket.on('user-connected', async (userId) => {
-        // Create connection for camera
-        const peerConnection = createPeerConnection(userId);
-        peers[userId] = peerConnection;
+// Inisialisasi Game
+joinBtn.addEventListener('click', () => {
+    const username = usernameInput.value.trim() || 'Player';
+    socket.emit('join-game', username);
+    loginMenu.style.display = 'none';
+    uiLayer.style.display = 'block';
+    initThreeJS();
+    isPlaying = true;
+});
 
-        localStream.getTracks().forEach(track => {
-            peerConnection.addTrack(track, localStream);
-        });
+function initThreeJS() {
+    // Scene
+    scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x050510);
+    scene.fog = new THREE.Fog(0x050510, 10, 50);
 
-        const offer = await peerConnection.createOffer();
-        await peerConnection.setLocalDescription(offer);
-        socket.emit('offer', {
-            target: userId,
-            caller: socket.id,
-            sdp: peerConnection.localDescription
-        });
+    // Camera
+    camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+    
+    // Renderer
+    renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    document.body.appendChild(renderer.domElement);
 
-        // If we are sharing our screen, also send a screen offer to this new user
-        if (isScreenSharing && screenStream) {
-            connectScreenToUser(userId);
-        }
+    // Controls (PointerLock)
+    controls = new THREE.PointerLockControls(camera, document.body);
+    document.addEventListener('click', () => {
+        if (isPlaying) controls.lock();
     });
 
-    socket.on('offer', async (payload) => {
-        const peerConnection = createPeerConnection(payload.caller);
+    // Raycaster (Untuk menembak)
+    raycaster = new THREE.Raycaster();
+
+    // Lingkungan (Lantai Grid)
+    const gridHelper = new THREE.GridHelper(100, 100, 0x00ffff, 0x003333);
+    scene.add(gridHelper);
+
+    // Pencahayaan
+    const ambientLight = new THREE.AmbientLight(0xffffff, 0.5);
+    scene.add(ambientLight);
+    const dirLight = new THREE.DirectionalLight(0xffffff, 0.8);
+    dirLight.position.set(10, 20, 10);
+    scene.add(dirLight);
+
+    // Input WASD
+    document.addEventListener('keydown', onKeyDown);
+    document.addEventListener('keyup', onKeyUp);
+    document.addEventListener('mousedown', onMouseClick); // Tembak
+
+    // Start Loop
+    animate();
+}
+
+function onKeyDown(event) {
+    switch (event.code) {
+        case 'KeyW': moveForward = true; break;
+        case 'KeyA': moveLeft = true; break;
+        case 'KeyS': moveBackward = true; break;
+        case 'KeyD': moveRight = true; break;
+    }
+}
+
+function onKeyUp(event) {
+    switch (event.code) {
+        case 'KeyW': moveForward = false; break;
+        case 'KeyA': moveLeft = false; break;
+        case 'KeyS': moveBackward = false; break;
+        case 'KeyD': moveRight = false; break;
+    }
+}
+
+function onMouseClick(event) {
+    if (event.button !== 0 || !controls.isLocked) return; // Hanya klik kiri
+    
+    // Suara atau efek tembakan (sederhana)
+    drawLaser();
+
+    // Deteksi target
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    
+    const targets = Object.values(playerMeshes);
+    const intersects = raycaster.intersectObjects(targets);
+
+    if (intersects.length > 0) {
+        const hitObject = intersects[0].object;
+        socket.emit('shoot', hitObject.userData.id);
+    }
+}
+
+function drawLaser() {
+    // Efek tembakan laser sederhana
+    const material = new THREE.LineBasicMaterial({ color: 0x00ffff, linewidth: 2 });
+    const points = [];
+    
+    // Dari bawah kamera sedikit
+    const start = camera.position.clone();
+    start.y -= 0.2;
+    
+    // Ke depan kamera
+    const direction = new THREE.Vector3();
+    camera.getWorldDirection(direction);
+    const end = start.clone().add(direction.multiplyScalar(50));
+    
+    points.push(start);
+    points.push(end);
+    
+    const geometry = new THREE.BufferGeometry().setFromPoints(points);
+    const line = new THREE.Line(geometry, material);
+    scene.add(line);
+    
+    setTimeout(() => {
+        scene.remove(line);
+        geometry.dispose();
+        material.dispose();
+    }, 100);
+}
+
+// Membuat Pemain Lain (Bentuk Kubus)
+function createPlayerMesh(playerData) {
+    const geometry = new THREE.BoxGeometry(1, 2, 1);
+    const material = new THREE.MeshLambertMaterial({ color: playerData.color });
+    const mesh = new THREE.Mesh(geometry, material);
+    
+    mesh.position.set(playerData.x, playerData.y, playerData.z);
+    mesh.userData = { id: playerData.id };
+    
+    scene.add(mesh);
+    return mesh;
+}
+
+// JARINGAN SOCKET.IO /////////////////////////////
+
+socket.on('connect', () => {
+    myId = socket.id;
+});
+
+socket.on('current-players', (serverPlayers) => {
+    for (let id in serverPlayers) {
+        if (id !== myId && !playerMeshes[id]) {
+            playerMeshes[id] = createPlayerMesh(serverPlayers[id]);
+        } else if (id === myId) {
+            // Set posisi awal kita
+            camera.position.set(serverPlayers[id].x, 2, serverPlayers[id].z);
+        }
+    }
+});
+
+socket.on('new-player', (playerData) => {
+    if (!playerMeshes[playerData.id]) {
+        playerMeshes[playerData.id] = createPlayerMesh(playerData);
+    }
+});
+
+socket.on('player-disconnected', (id) => {
+    if (playerMeshes[id]) {
+        scene.remove(playerMeshes[id]);
+        delete playerMeshes[id];
+    }
+});
+
+// Update Posisi 20FPS dari Server
+socket.on('state-update', (serverPlayers) => {
+    if (!isPlaying) return;
+    
+    for (let id in serverPlayers) {
+        if (id !== myId && playerMeshes[id]) {
+            // Interpolasi (gerakan mulus) bisa ditambahkan di sini, sementara langsung set:
+            playerMeshes[id].position.x = serverPlayers[id].x;
+            playerMeshes[id].position.y = serverPlayers[id].y;
+            playerMeshes[id].position.z = serverPlayers[id].z;
+            
+            // Putar kotak mengikuti arah melihatnya
+            playerMeshes[id].rotation.y = serverPlayers[id].rotation;
+        } else if (id === myId) {
+            // Sinkronisasi Data Kita (Nyawa/Skor)
+            myScore = serverPlayers[id].score;
+            myScoreEl.innerText = myScore;
+        }
+    }
+});
+
+socket.on('health-update', (data) => {
+    if (data.id === myId) {
+        myHealth = data.health;
         
-        // Receiver just stores it in `peers` regardless if it's a camera or screen
-        peers[payload.caller] = peerConnection;
-
-        await peerConnection.setRemoteDescription(new RTCSessionDescription(payload.sdp));
-
-        // Only send back our camera track if this is a standard camera call
-        if (!payload.caller.endsWith('-screen')) {
-            localStream.getTracks().forEach(track => {
-                peerConnection.addTrack(track, localStream);
-            });
-        }
-
-        const answer = await peerConnection.createAnswer();
-        await peerConnection.setLocalDescription(answer);
-
-        // Send answer back to the actual socket id, but tell them it's for their specific caller context
-        const actualTarget = payload.caller.replace('-screen', '');
-        socket.emit('answer', {
-            target: actualTarget,
-            caller: socket.id,
-            sdp: peerConnection.localDescription,
-            answerFor: payload.caller
-        });
-    });
-
-    socket.on('answer', async (payload) => {
-        let peerConnection;
-        if (payload.answerFor && payload.answerFor.endsWith('-screen')) {
-             peerConnection = screenPeers[payload.caller]; 
+        // Ubah warna bar jika sekarat
+        healthFill.style.width = Math.max(0, myHealth) + '%';
+        if (myHealth <= 30) {
+            healthFill.style.background = '#f00';
         } else {
-             peerConnection = peers[payload.caller];
+            healthFill.style.background = '#0f0';
         }
+    } else if (playerMeshes[data.id]) {
+        // Efek kedip merah saat player lain tertembak
+        const mat = playerMeshes[data.id].material;
+        const oriColor = mat.color.getHex();
+        mat.color.setHex(0xff0000);
+        setTimeout(() => mat.color.setHex(oriColor), 100);
+    }
+});
+
+socket.on('player-killed', (data) => {
+    // Tampilkan di UI feed
+    const el = document.createElement('div');
+    el.className = 'kill-msg';
+    el.innerText = `${data.killer} membunuh ${data.victim}`;
+    killFeed.appendChild(el);
+    setTimeout(() => el.remove(), 4000);
+
+    // Jika kita yang mati, teleport kembali
+    if (data.victimId === myId) {
+        camera.position.set(data.newPos.x, 2, data.newPos.z);
+        myHealth = 100;
+        healthFill.style.width = '100%';
+        healthFill.style.background = '#0f0';
         
-        if (peerConnection) {
-            await peerConnection.setRemoteDescription(new RTCSessionDescription(payload.sdp));
-        }
-    });
-
-    socket.on('ice-candidate', async (incomingCandidate, callerId) => {
-        const peerConnection = peers[callerId] || screenPeers[callerId];
-        if (peerConnection) {
-            try {
-                await peerConnection.addIceCandidate(new RTCIceCandidate(incomingCandidate));
-            } catch (e) {
-                console.error(e);
-            }
-        }
-    });
-
-    socket.emit('join-room', 'default-room');
-
-}).catch(err => {
-    alert('Kamera atau mikrofon tidak ditemukan atau akses ditolak.');
-});
-
-socket.on('user-disconnected', userId => {
-    // Remove camera peer if exists
-    if (peers[userId]) {
-        peers[userId].close();
-        delete peers[userId];
+        // Efek mati di layar
+        uiLayer.style.background = 'rgba(255, 0, 0, 0.5)';
+        setTimeout(() => uiLayer.style.background = 'none', 300);
     }
-    const videoWrapper = document.getElementById(`video-wrapper-${userId}`);
-    if (videoWrapper) videoWrapper.remove();
 });
 
-function createPeerConnection(userId, isScreenOutbound = false) {
-    const peerConnection = new RTCPeerConnection(iceServers);
-    const video = createVideoElement();
+// GAME LOOP UTAMA ////////////////////////////////
+function animate() {
+    requestAnimationFrame(animate);
 
-    peerConnection.onicecandidate = event => {
-        if (event.candidate) {
-            socket.emit('ice-candidate', {
-                target: userId,
-                candidate: event.candidate,
-                caller: socket.id + (isScreenOutbound ? '-screen' : '')
-            });
-        }
-    };
+    const time = performance.now();
 
-    peerConnection.ontrack = event => {
-        addVideoStream(video, event.streams[0], userId);
-    };
+    if (controls.isLocked === true) {
+        const delta = (time - prevTime) / 1000;
 
-    return peerConnection;
-}
+        velocity.x -= velocity.x * 10.0 * delta;
+        velocity.z -= velocity.z * 10.0 * delta;
 
-function createVideoElement() {
-    const video = document.createElement('video');
-    video.autoplay = true;
-    video.playsInline = true;
-    // Tambahkan atribut HTML secara eksplisit (Dibutuhkan oleh iOS Safari)
-    video.setAttribute('playsinline', '');
-    video.setAttribute('autoplay', '');
-    return video;
-}
+        direction.z = Number(moveForward) - Number(moveBackward);
+        direction.x = Number(moveRight) - Number(moveLeft);
+        direction.normalize(); // Biar lari serong tidak lebih cepat
 
-function addVideoStream(video, stream, userId) {
-    if (document.getElementById(`video-wrapper-${userId}`)) return;
+        if (moveForward || moveBackward) velocity.z -= direction.z * 100.0 * delta;
+        if (moveLeft || moveRight) velocity.x -= direction.x * 100.0 * delta;
 
-    video.srcObject = stream;
-    
-    // Paksa video untuk memutar (Penting untuk HP / iOS Safari)
-    video.addEventListener('loadedmetadata', () => {
-        video.play().catch(e => console.error("Auto-play prevented:", e));
-    });
+        controls.moveRight(-velocity.x * delta);
+        controls.moveForward(-velocity.z * delta);
+        
+        // Jaga agar kamera tetap di ketinggian 2 (tinggi mata)
+        camera.position.y = 2;
 
-    // Mute video lokal, DAN mute layar presentasi masuk. 
-    // Browser HP sering memblokir video yang tidak di-mute (meskipun screen share tidak ada suaranya)
-    if (userId === 'local' || userId === 'local-screen' || userId.endsWith('-screen')) {
-        video.muted = true;
-        video.setAttribute('muted', '');
-    }
-
-    const videoWrapper = document.createElement('div');
-    videoWrapper.className = 'video-container';
-    videoWrapper.id = `video-wrapper-${userId}`;
-    
-    // Style differently if it's a screen share
-    if (userId.endsWith('-screen')) {
-        videoWrapper.classList.add('screen-share-view');
-    }
-    
-    videoWrapper.append(video);
-    videoGrid.append(videoWrapper);
-}
-
-// UI Controls
-const toggleAudioBtn = document.getElementById('toggle-audio');
-const toggleVideoBtn = document.getElementById('toggle-video');
-const switchCameraBtn = document.getElementById('switch-camera');
-const shareScreenBtn = document.getElementById('share-screen');
-const leaveBtn = document.getElementById('leave-btn');
-
-toggleAudioBtn.addEventListener('click', () => {
-    const audioTrack = localStream.getAudioTracks()[0];
-    audioTrack.enabled = !audioTrack.enabled;
-    toggleAudioBtn.innerHTML = audioTrack.enabled ? 
-        '<i class="fa-solid fa-microphone"></i>' : 
-        '<i class="fa-solid fa-microphone-slash"></i>';
-    toggleAudioBtn.classList.toggle('muted', !audioTrack.enabled);
-});
-
-toggleVideoBtn.addEventListener('click', () => {
-    const videoTrack = localStream.getVideoTracks()[0];
-    videoTrack.enabled = !videoTrack.enabled;
-    toggleVideoBtn.innerHTML = videoTrack.enabled ? 
-        '<i class="fa-solid fa-video"></i>' : 
-        '<i class="fa-solid fa-video-slash"></i>';
-    toggleVideoBtn.classList.toggle('muted', !videoTrack.enabled);
-});
-
-let currentFacingMode = 'user';
-let isScreenSharing = false;
-let screenStream = null;
-
-switchCameraBtn.addEventListener('click', async () => {
-    currentFacingMode = currentFacingMode === 'user' ? 'environment' : 'user';
-    
-    try {
-        const newStream = await navigator.mediaDevices.getUserMedia({
-            video: { facingMode: currentFacingMode },
-            audio: false 
+        // Kirim pergerakan kita ke server
+        socket.emit('player-movement', {
+            x: camera.position.x,
+            y: 1, // Ketinggian body/kubus
+            z: camera.position.z,
+            rotation: camera.rotation.y
         });
-        
-        const oldVideoTrack = localStream.getVideoTracks()[0];
-        const newVideoTrack = newStream.getVideoTracks()[0];
-        
-        // Replace video track in all active camera peer connections
-        for (let userId in peers) {
-            // Only replace in actual camera peers, not screen peers
-            if (!userId.endsWith('-screen')) {
-                const sender = peers[userId].getSenders().find(s => s.track && s.track.kind === 'video');
-                if (sender) sender.replaceTrack(newVideoTrack);
-            }
-        }
-        
-        // Update local stream
-        localStream.removeTrack(oldVideoTrack);
-        localStream.addTrack(newVideoTrack);
-        oldVideoTrack.stop();
-        
-        // Update UI
-        const localVideo = document.querySelector('#video-wrapper-local video');
-        if (localVideo) localVideo.srcObject = localStream;
-        
-        newVideoTrack.enabled = !toggleVideoBtn.classList.contains('muted');
-        
-    } catch (err) {
-        console.error('Failed to switch camera', err);
-        alert('Gagal mengganti kamera. Pastikan browser mengizinkan kamera dan Anda menggunakan perangkat dengan lebih dari 1 kamera.');
     }
-});
 
-shareScreenBtn.addEventListener('click', async () => {
-    if (!isScreenSharing) {
-        try {
-            screenStream = await navigator.mediaDevices.getDisplayMedia({ video: true });
-            isScreenSharing = true;
-            
-            const screenTrack = screenStream.getVideoTracks()[0];
-            
-            // Listen for native "Stop Sharing" button from browser UI
-            screenTrack.onended = () => {
-                stopScreenSharing();
-            };
-            
-            // Show screen locally
-            addVideoStream(createVideoElement(), screenStream, 'local-screen');
-            
-            // Create new peer connections just for the screen to all existing users
-            for (let userId in peers) {
-                if (!userId.endsWith('-screen')) {
-                    connectScreenToUser(userId);
-                }
-            }
-            
-            shareScreenBtn.classList.add('active-share');
-            
-        } catch (err) {
-            console.error('Failed to share screen', err);
-            alert('Gagal berbagi layar. Pastikan Anda menggunakan laptop/PC dan URL memiliki gembok hijau (HTTPS).');
-        }
-    } else {
-        stopScreenSharing();
-    }
-});
-
-async function connectScreenToUser(userId) {
-    const screenPeer = createPeerConnection(userId, true); // true = isScreenOutbound
-    screenPeers[userId] = screenPeer;
-    
-    screenStream.getTracks().forEach(track => {
-        screenPeer.addTrack(track, screenStream);
-    });
-    
-    const offer = await screenPeer.createOffer();
-    await screenPeer.setLocalDescription(offer);
-    
-    socket.emit('offer', {
-        target: userId,
-        caller: socket.id + '-screen',
-        sdp: screenPeer.localDescription
-    });
+    prevTime = time;
+    renderer.render(scene, camera);
 }
 
-function stopScreenSharing() {
-    if (!isScreenSharing) return;
-    isScreenSharing = false;
-    
-    if (screenStream) {
-        screenStream.getTracks().forEach(track => track.stop());
+// Resize Layar
+window.addEventListener('resize', () => {
+    if(camera && renderer) {
+        camera.aspect = window.innerWidth / window.innerHeight;
+        camera.updateProjectionMatrix();
+        renderer.setSize(window.innerWidth, window.innerHeight);
     }
-    
-    // Close all screen peer connections
-    for (let userId in screenPeers) {
-        screenPeers[userId].close();
-        delete screenPeers[userId];
-    }
-    
-    // Remove local screen UI
-    const localScreenWrapper = document.getElementById('video-wrapper-local-screen');
-    if (localScreenWrapper) localScreenWrapper.remove();
-    
-    // Tell server we stopped screen sharing so others can remove our screen video
-    socket.emit('stop-screen-share', socket.id + '-screen');
-    
-    shareScreenBtn.classList.remove('active-share');
-}
-
-leaveBtn.addEventListener('click', () => {
-    if (localStream) {
-        localStream.getTracks().forEach(track => track.stop());
-    }
-    if (screenStream) {
-        screenStream.getTracks().forEach(track => track.stop());
-    }
-    socket.disconnect();
-    document.body.innerHTML = '<div class="leave-message">Panggilan diakhiri.</div>';
 });
