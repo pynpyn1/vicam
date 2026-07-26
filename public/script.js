@@ -134,6 +134,9 @@ function createVideoElement() {
     const video = document.createElement('video');
     video.autoplay = true;
     video.playsInline = true;
+    // Tambahkan atribut HTML secara eksplisit (Dibutuhkan oleh iOS Safari)
+    video.setAttribute('playsinline', '');
+    video.setAttribute('autoplay', '');
     return video;
 }
 
@@ -147,8 +150,11 @@ function addVideoStream(video, stream, userId) {
         video.play().catch(e => console.error("Auto-play prevented:", e));
     });
 
-    if (userId === 'local' || userId === 'local-screen') {
+    // Mute video lokal, DAN mute layar presentasi masuk. 
+    // Browser HP sering memblokir video yang tidak di-mute (meskipun screen share tidak ada suaranya)
+    if (userId === 'local' || userId === 'local-screen' || userId.endsWith('-screen')) {
         video.muted = true;
+        video.setAttribute('muted', '');
     }
 
     const videoWrapper = document.createElement('div');
