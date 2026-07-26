@@ -88,21 +88,24 @@ body {
 
 /* Priority Layout for Screen Share */
 .video-grid:has(.screen-share-view) {
-    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-    grid-auto-rows: 150px;
-    align-content: end;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 1rem;
+    align-content: flex-start;
+}
+
+.video-grid:has(.screen-share-view) .video-container.screen-share-view {
+    flex: 0 0 100%;
+    height: calc(100vh - 280px);
+    border: 2px solid var(--accent);
+    order: -1;
 }
 
 .video-grid:has(.screen-share-view) .video-container:not(.screen-share-view) {
-    height: 150px;
-}
-
-.video-grid .video-container.screen-share-view {
-    grid-column: 1 / -1;
-    height: calc(100vh - 300px);
-    border: 2px solid var(--accent);
-    order: -1; /* Always put screen share at the top */
-    margin-bottom: 1rem;
+    flex: 0 0 180px;
+    height: 120px;
 }
 
 /* Normal video containers */
@@ -125,8 +128,8 @@ video {
 }
 
 .video-container.screen-share-view video {
-    transform: none; /* Don't mirror screen shares */
-    object-fit: contain; /* Show full screen without cropping */
+    transform: none !important; /* Pastikan tidak mirror */
+    object-fit: contain; /* Tampilkan full layar tanpa terpotong */
 }
 
 /* Controls */
